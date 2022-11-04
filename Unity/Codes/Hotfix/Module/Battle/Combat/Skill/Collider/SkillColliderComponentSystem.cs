@@ -55,6 +55,7 @@ namespace ET
             self.Awake(a);
         }
     }
+
     [FriendClass(typeof(SkillColliderComponent))]
     public static class SkillColliderComponentSystem
     {

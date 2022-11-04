@@ -77,24 +77,53 @@ namespace ET
         /// <returns></returns>
         public static Buff AddBuff(this BuffComponent self, int id,long timestamp,long sourceId)
         {
-            BuffConfig conf = BuffConfigCategory.Instance.Get(id);
-            if (self.Groups.ContainsKey(conf.Group))
+            bool canAdd = true;
+            var source = self.unit.Parent.GetChild<Unit>(sourceId);
+            for (int i = 0; i < self.AllBuff.Count; i++)
             {
-                var oldId = self.Groups[conf.Group];
-                var old = self.GetChild<Buff>(oldId);
-                if (old.Config.Priority > conf.Priority) {
-                    Log.Info("添加BUFF失败，优先级"+old.Config.Id+" > "+conf.Id);
-                    return null; //优先级低
+                var basebuff = self.GetChild<Buff>(self.AllBuff[i]);
+                for (int j = 0; j < basebuff.Config.Type.Length; j++)
+                {
+                    if (!BuffWatcherComponent.Instance.BeforeAddBuff(basebuff,basebuff.Config.Type[j], source, self.unit, id))
+                    {
+                        canAdd = false;
+                    }
                 }
-                Log.Info("优先级高或相同，替换旧的");
-                self.Remove(self.Groups[conf.Group]);
             }
-            
-            Buff buff = self.AddChild<Buff,int,long,long>(id,timestamp,sourceId,true);
-            self.Groups[conf.Group] = buff.Id;
-            self.AllBuff.Add(buff.Id);
-            EventSystem.Instance.Publish(new EventType.AfterAddBuff(){Buff = buff});
-            return buff;
+
+            if (canAdd)
+            {
+                BuffConfig conf = BuffConfigCategory.Instance.Get(id);
+                if (self.Groups.ContainsKey(conf.Group))
+                {
+                    var oldId = self.Groups[conf.Group];
+                    var old = self.GetChild<Buff>(oldId);
+                    if (old.Config.Priority > conf.Priority)
+                    {
+                        Log.Info("添加BUFF失败，优先级" + old.Config.Id + " > " + conf.Id);
+                        return null; //优先级低
+                    }
+
+                    Log.Info("优先级高或相同，替换旧的");
+                    self.Remove(self.Groups[conf.Group]);
+                }
+
+                Buff buff = self.AddChild<Buff, int, long, long>(id, timestamp, sourceId, true);
+                self.Groups[conf.Group] = buff.Id;
+                self.AllBuff.Add(buff.Id);
+                for (int i = 0; i < self.AllBuff.Count; i++)
+                {
+                    var basebuff = self.GetChild<Buff>(self.AllBuff[i]);
+                    for (int j = 0; j < basebuff.Config.Type.Length; j++)
+                    {
+                        BuffWatcherComponent.Instance.AfterAddBuff(basebuff,basebuff.Config.Type[j], source, self.unit, buff);
+                    }
+                }
+                EventSystem.Instance.Publish(new EventType.AfterAddBuff() { Buff = buff });
+                return buff;
+            }
+
+            return null;
         }
         /// <summary>
         /// 通过Buff的唯一Id取
@@ -132,14 +161,39 @@ namespace ET
         /// </summary>
         /// <param name="self"></param>
         /// <param name="id"></param>
-        public static void Remove(this BuffComponent self, long id)
+        /// <param name="force"></param>
+        public static void Remove(this BuffComponent self, long id,bool force = false)
         {
             Buff buff = self.GetChild<Buff>(id);
             if(buff==null) return;
-            EventSystem.Instance.Publish(new EventType.AfterRemoveBuff(){Buff = buff});
-            self.Groups.Remove(buff.Config.Group);
-            self.AllBuff.Remove(id);
-            buff.Dispose();
+            bool canRemove = true;
+            for (int i = 0; i < self.AllBuff.Count; i++)
+            {
+                var basebuff = self.GetChild<Buff>(self.AllBuff[i]);
+                for (int j = 0; j < basebuff.Config.Type.Length; j++)
+                {
+                    if (!BuffWatcherComponent.Instance.BeforeRemoveBuff(basebuff,basebuff.Config.Type[j], self.unit, buff))
+                    {
+                        canRemove = false;
+                    }
+                }
+            }
+
+            if (canRemove||force)
+            {
+                self.Groups.Remove(buff.Config.Group);
+                self.AllBuff.Remove(id);
+                for (int i = 0; i < self.AllBuff.Count; i++)
+                {
+                    var basebuff = self.GetChild<Buff>(self.AllBuff[i]);
+                    for (int j = 0; j < basebuff.Config.Type.Length; j++)
+                    {
+                        BuffWatcherComponent.Instance.AfterRemoveBuff(basebuff,basebuff.Config.Type[j], self.unit, buff);
+                    }
+                }
+                EventSystem.Instance.Publish(new EventType.AfterRemoveBuff() { Buff = buff });
+                buff.Dispose();
+            }
         }
         /// <summary>
         /// 通过Buff配置表的id移除buff
@@ -194,6 +248,24 @@ namespace ET
                 for (int j = 0; j < buff.Config.Type.Length; j++)
                 {
                     BuffWatcherComponent.Instance.AfterDamage(buff.Config.Type[j], attacker, target, buff, damage);
+                }
+            }
+        }
+        
+        /// <summary>
+        /// 造成伤害后
+        /// </summary>
+        /// <param name="self"></param>
+        /// <param name="target"></param>
+        /// <param name="before"></param>
+        public static void AfterMove(this BuffComponent self, Unit target,WrapVector3 before)
+        {
+            for (int i = 0; i < self.AllBuff.Count; i++)
+            {
+                var buff = self.GetChild<Buff>(self.AllBuff[i]);
+                for (int j = 0; j < buff.Config.Type.Length; j++)
+                {
+                    BuffWatcherComponent.Instance.AfterMove(buff.Config.Type[j],target, buff, before);
                 }
             }
         }

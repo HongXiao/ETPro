@@ -28,6 +28,12 @@ namespace ET
         {
             get => BuffBleedConfigCategory.Instance.Get(ConfigId);
         }
+        
+        [BsonIgnore]
+        public BuffChantConfig BuffChantConfig
+        {
+            get => BuffChantConfigCategory.Instance.Get(ConfigId);
+        }
         /// <summary>
         /// 持续到什么时间
         /// </summary>

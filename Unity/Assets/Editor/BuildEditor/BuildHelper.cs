@@ -87,7 +87,8 @@ namespace ET
             buildParameters.CopyBuildinTagFiles = true;
             buildParameters.EncryptionServices = new GameEncryption();
             buildParameters.CompressOption = ECompressOption.LZ4;
-    
+            buildParameters.DisableWriteTypeTree = true;//禁止写入类型树结构（可以降低包体和内存并提高加载效率）
+            
             // 执行构建
             AssetBundleBuilder builder = new AssetBundleBuilder();
             var buildResult = builder.Run(buildParameters);
@@ -149,7 +150,7 @@ namespace ET
             //打AOT程序集
             if (isBuildExe)
             {
-                BuildAssemblieEditor.BuildAOT();
+                BuildAssemblieEditor.BuildUserAOT();
             }
             
             // if (isInject)
@@ -174,11 +175,12 @@ namespace ET
 
             if (isBuildExe)
             {
-                // MethodBridgeHelper.MethodBridge_All();
                 #region 防裁剪
                 FileHelper.CopyDirectory("Codes", "Assets/Codes/Temp");
                 AssetDatabase.Refresh();
                 #endregion
+                
+                HybridCLR.Editor.Commands.PrebuildCommand.GenerateAll();
                 
                 AssetDatabase.Refresh();
                 string[] levels = {

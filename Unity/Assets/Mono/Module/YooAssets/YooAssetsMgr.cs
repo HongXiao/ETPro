@@ -23,14 +23,22 @@ namespace YooAsset
         private PatchManifest staticManifest;
 
         public int staticVersion;
+        public bool IsDllBuildIn;
         public IEnumerator Init(YooAssets.EPlayMode mode)
         {
+            IsDllBuildIn = false;
             var _downloader1 = new UnityWebDataRequester();
             _downloader1.SendRequest(StaticVersionStreamingPath);
-            yield return _downloader1;
+            while (!_downloader1.IsDone())
+            {
+                yield return 0;
+            }
             int.TryParse(_downloader1.GetText(),out int buildInVersion);
             _downloader1.Dispose();
             staticVersion = PlayerPrefs.GetInt("STATIC_VERSION", -1);
+#if !UNITY_EDITOR
+            this.IsDllBuildIn = staticVersion == buildInVersion;
+#endif
             if (staticVersion == -1)
             {
                 staticVersion = buildInVersion;
@@ -40,7 +48,10 @@ namespace YooAsset
             string path = string.Format(PatchManifestStreamingPath, buildInVersion);
             _downloader1 = new UnityWebDataRequester();
             _downloader1.SendRequest(path);
-            yield return _downloader1;
+            while (!_downloader1.IsDone())
+            {
+                yield return 0;
+            }
             var jStr = _downloader1.GetText();
             _downloader1.Dispose();
             Debug.Log("Load buildInManifest at"+path+" jstr == null?"+string.IsNullOrEmpty(jStr));
@@ -51,7 +62,10 @@ namespace YooAsset
                 path = string.Format(PatchManifestPersistentPath, staticVersion);
                 _downloader1 = new UnityWebDataRequester();
                 _downloader1.SendRequest(path);
-                yield return _downloader1;
+                while (!_downloader1.IsDone())
+                {
+                    yield return 0;
+                }
                 jStr = _downloader1.GetText();
                 _downloader1.Dispose();
                 Debug.Log("Load buildInManifest at"+path+" jstr == null?"+string.IsNullOrEmpty(jStr));

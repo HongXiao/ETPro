@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using UnityEditor;
 using System.IO;
 using System.Reflection;
+using System.Runtime.Serialization;
+using HybridCLR;
 using UnityEngine;
 using YooAsset;
 
@@ -10,6 +12,7 @@ namespace ET
 {
 	public class CodeLoader
 	{
+		[IgnoreDataMember]//防裁剪
 		public static CodeLoader Instance = new CodeLoader();
 
 		public Action Update;
@@ -18,71 +21,63 @@ namespace ET
 		public Action OnApplicationQuit;
 
 		private Assembly assembly;
-		
+
 		public CodeMode CodeMode { get; set; }
-		
-		private MemoryStream assStream ;
-		private MemoryStream pdbStream ;
-		
+
+		private MemoryStream assStream;
+		private MemoryStream pdbStream;
+
+		public bool IsInit = false;
+
 		// 所有mono的类型
 		private readonly Dictionary<string, Type> monoTypes = new Dictionary<string, Type>();
-		
+
 		// 热更层的类型
 		private readonly Dictionary<string, Type> hotfixTypes = new Dictionary<string, Type>();
-		
 
-		public static string[] aotDllList = {
+		public static List<string> AllAotDllList
+		{
+			get
+			{
+				var res = new List<string>();
+				res.AddRange(SystemAotDllList);
+				res.AddRange(UserAotDllList);
+				return res;
+			}
+		}
+		public static string[] SystemAotDllList = {
+			"mscorlib.dll", 
+			"System.dll", 
+			"System.Core.dll"
+		};
+		public static string[] UserAotDllList = {
 			"Unity.ThirdParty.dll",
-			"Unity.Mono.dll",
-			"mscorlib.dll",
-			"System.dll",
-			"System.Core.dll", // 如果使用了Linq，需要这个
-			// "Newtonsoft.Json.dll",
-			// "protobuf-net.dll",
-			// "Google.Protobuf.dll",
-			// "MongoDB.Bson.dll",
-			// "DOTween.Modules.dll",
-			// "UniTask.dll",
+			"Unity.Mono.dll"
 		};
 		/// <summary>
 		/// 为aot assembly加载原始metadata， 这个代码放aot或者热更新都行。
 		/// 一旦加载后，如果AOT泛型函数对应native实现不存在，则自动替换为解释模式执行
 		/// </summary>
-		public static unsafe void LoadMetadataForAOTAssembly()
+		public void LoadMetadataForAOTAssembly()
 		{
-			// 可以加载任意aot assembly的对应的dll。但要求dll必须与unity build过程中生成的裁剪后的dll一致，而不能直接使用原始dll。
-			// 我们在BuildProcessor_xxx里添加了处理代码，这些裁剪后的dll在打包时自动被复制到 {项目目录}/HybridCLRData/AssembliesPostIl2CppStrip/{Target} 目录。
-
-			/// 注意，补充元数据是给AOT dll补充元数据，而不是给热更新dll补充元数据。
-			/// 热更新dll不缺元数据，不需要补充，如果调用LoadMetadataForAOTAssembly会返回错误
-
+			if(this.CodeMode!=CodeMode.Wolong) return;
+			// 注意，补充元数据是给AOT dll补充元数据，而不是给热更新dll补充元数据。
+			// 热更新dll不缺元数据，不需要补充，如果调用LoadMetadataForAOTAssembly会返回错误
 			AssetBundle ab = null;
 			if (YooAssets.PlayMode != YooAssets.EPlayMode.EditorSimulateMode)
 				ab = YooAssetsMgr.Instance.SyncLoadAssetBundle("assets/assetspackage/code/aot.bundle");
 
-			foreach (var aotDllName in aotDllList)
+			foreach (var aotDllName in AllAotDllList)
 			{
-				byte[] dllBytes;
+				byte[] dllBytes = null;
 				if (YooAssets.PlayMode != YooAssets.EPlayMode.EditorSimulateMode)
 					dllBytes = ((TextAsset)ab.LoadAsset($"{Define.AOTDir}{aotDllName}.bytes", typeof(TextAsset))).bytes;
 #if UNITY_EDITOR
 				else
 					dllBytes = (AssetDatabase.LoadAssetAtPath($"{Define.AOTDir}{aotDllName}.bytes", typeof(TextAsset)) as TextAsset).bytes;
 #endif
-
-				fixed (byte* ptr = dllBytes)
-				{
-					try
-					{
-						// 加载assembly对应的dll，会自动为它hook。一旦aot泛型函数的native函数不存在，用解释器版本代码
-						int err = HybridCLR.RuntimeApi.LoadMetadataForAOTAssembly((IntPtr) ptr, dllBytes.Length);
-						Log.Info($"LoadMetadataForAOTAssembly:{aotDllName}. ret:{err}");
-					}
-					catch (Exception ex)
-					{
-						Log.Error($"LoadMetadataForAOTAssembly:{aotDllName} error");
-					}
-				}
+				var err = RuntimeApi.LoadMetadataForAOTAssembly(dllBytes,HomologousImageMode.SuperSet);
+				Log.Info($"LoadMetadataForAOTAssembly:{aotDllName}. ret:{err}");
 			}
 			if (YooAssets.PlayMode != YooAssets.EPlayMode.EditorSimulateMode)
 				ab?.Unload(true);
@@ -125,35 +120,54 @@ namespace ET
 				case CodeMode.Wolong:
 				case CodeMode.Mono:
 				{
-					if(this.CodeMode==CodeMode.Wolong) LoadMetadataForAOTAssembly();
 					byte[] assBytes = null;
 					byte[] pdbBytes= null;
 					AssetBundle ab = null;
-
-					if (YooAssets.PlayMode != YooAssets.EPlayMode.EditorSimulateMode)
+					//先尝试直接加载AOT的dll
+					if (YooAssetsMgr.Instance.IsDllBuildIn)
 					{
-						ab = YooAssetsMgr.Instance.SyncLoadAssetBundle("assets/assetspackage/code/hotfix.bundle");
-						assBytes = ((TextAsset) ab.LoadAsset($"{Define.HotfixDir}Code{YooAssetsMgr.Instance.Config.Resver}.dll.bytes", typeof (TextAsset))).bytes;
-						pdbBytes = ((TextAsset) ab.LoadAsset($"{Define.HotfixDir}Code{YooAssetsMgr.Instance.Config.Resver}.pdb.bytes", typeof (TextAsset))).bytes;
+						foreach (var item in AppDomain.CurrentDomain.GetAssemblies())
+						{
+							if (item.FullName.Contains("Unity.Codes"))
+							{
+								assembly = item;
+								Debug.Log("Get AOT Dll Success");
+								break;
+							}
+						}
 					}
+					//再load（等hybrid dll技术）
+					if(this.assembly == null)
+					{
+						if (YooAssets.PlayMode != YooAssets.EPlayMode.EditorSimulateMode)
+						{
+							ab = YooAssetsMgr.Instance.SyncLoadAssetBundle("assets/assetspackage/code/hotfix.bundle");
+							assBytes = ((TextAsset) ab.LoadAsset($"{Define.HotfixDir}Code{YooAssetsMgr.Instance.Config.Dllver}.dll.bytes",
+								typeof (TextAsset))).bytes;
+							pdbBytes = ((TextAsset) ab.LoadAsset($"{Define.HotfixDir}Code{YooAssetsMgr.Instance.Config.Dllver}.pdb.bytes",
+								typeof (TextAsset))).bytes;
+						}
 #if UNITY_EDITOR
-					else
-					{
-						string jstr = File.ReadAllText("Assets/AssetsPackage/config.bytes");
-						var obj = JsonHelper.FromJson<BuildConfig>(jstr);
-						int version = obj.Resver;
-						assBytes = (AssetDatabase.LoadAssetAtPath($"{Define.HotfixDir}Code{version}.dll.bytes", typeof (TextAsset)) as TextAsset).bytes;
-						pdbBytes = (AssetDatabase.LoadAssetAtPath($"{Define.HotfixDir}Code{version}.pdb.bytes", typeof (TextAsset)) as TextAsset).bytes;
-					}
+						else
+						{
+							string jstr = File.ReadAllText("Assets/AssetsPackage/config.bytes");
+							var obj = JsonHelper.FromJson<BuildConfig>(jstr);
+							int version = obj.Dllver;
+							assBytes = (AssetDatabase.LoadAssetAtPath($"{Define.HotfixDir}Code{version}.dll.bytes", typeof (TextAsset)) as TextAsset)
+									.bytes;
+							pdbBytes = (AssetDatabase.LoadAssetAtPath($"{Define.HotfixDir}Code{version}.pdb.bytes", typeof (TextAsset)) as TextAsset)
+									.bytes;
+						}
 #endif
-
-					assembly = Assembly.Load(assBytes, pdbBytes);
+						assembly = Assembly.Load(assBytes, pdbBytes);
+						Debug.Log("Get Dll Success");
+					}
 					foreach (Type type in this.assembly.GetTypes())
 					{
 						this.monoTypes[type.FullName] = type;
 						this.hotfixTypes[type.FullName] = type;
 					}
-					IStaticMethod start = new MonoStaticMethod(assembly, "ET.Entry", "Start");
+					IStaticAction start = new MonoStaticAction(assembly, "ET.Entry", "Start");
 					start.Run();
 					if (YooAssets.PlayMode != YooAssets.EPlayMode.EditorSimulateMode)
 						ab?.Unload(true);
@@ -167,11 +181,13 @@ namespace ET
 					
 					assembly = Assembly.Load(assBytes, pdbBytes);
 					this.LoadLogic();
-					IStaticMethod start = new MonoStaticMethod(assembly, "ET.Entry", "Start");
+					IStaticAction start = new MonoStaticAction(assembly, "ET.Entry", "Start");
 					start.Run();
 					break;
 				}
 			}
+
+			IsInit = true;
 		}
 
 		// 热重载调用下面三个方法
@@ -220,9 +236,21 @@ namespace ET
 		public void ReStart()
 		{
 			YooAssets.ForceUnloadAllAssets();
-			YooAssetsMgr.Instance.Init(YooAssets.PlayMode);
 			Log.Debug("ReStart");
 			isReStart = true;
+		}
+
+		public Dictionary<string, EntityView> GetAllEntitys()
+		{
+			IStaticFunc<Dictionary<string, EntityView>> GetAllEntitys = 
+					new MonoStaticFunc<Dictionary<string, EntityView>>(assembly, "ET.ViewEditorHelper", "GetAllEntitys");
+			return GetAllEntitys.Run();
+		}
+
+		public EntityData GetEntityData()
+		{
+			IStaticFunc<EntityData> GetEntityData = new MonoStaticFunc<EntityData>(assembly, "ET.ViewEditorHelper", "GetEntityData");
+			return GetEntityData.Run();
 		}
 	}
 }

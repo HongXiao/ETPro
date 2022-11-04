@@ -104,3 +104,8 @@ Unity/YooAsset.csproj
 Unity/YooAsset.Editor.csproj
 /Unity/Assets/SRDebugger
 /Unity/Assets/SRDebugger.meta
+Unity/HybridCLR.Editor.csproj
+Unity/HybridCLR.Runtime.csproj
+Unity/HybridCLRData
+Unity/Assets/HybridCLRData.meta
+Unity/Assets/HybridCLRData

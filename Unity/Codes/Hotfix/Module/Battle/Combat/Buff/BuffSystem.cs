@@ -60,6 +60,10 @@
                 {
                     self.RemoveComponent<BuffBleedComponent>();
                 }
+                else if (self.Config.Type[i] == BuffSubType.Chant)
+                {
+                    
+                }
             }
         }
     }
@@ -100,6 +104,11 @@
                     else if (self.Config.Type[i] == BuffSubType.Bleed)
                     {
                         self.AddComponent<BuffBleedComponent,int>(self.ConfigId);
+                    }
+                    else if (self.Config.Type[i] == BuffSubType.Chant)
+                    {
+                        if(self.BuffChantConfig.MoveInterrupt == 1)
+                            self.GetParent<BuffComponent>().unit.Stop(0);
                     }
                 }
             }
